@@ -1,0 +1,16 @@
+{
+  "connections": [
+    {
+      "userId": "user1",
+      "platform": "instagram",
+      "accessToken": "pending",
+      "connectedAt": "2026-06-19T09:29:27.050Z"
+    },
+    {
+      "userId": "user1",
+      "platform": "facebook",
+      "accessToken": "pending",
+      "connectedAt": "2026-06-19T09:32:07.308Z"
+    }
+  ]
+}
