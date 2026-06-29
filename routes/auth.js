@@ -4,14 +4,14 @@ const pool    = require("../db");
 const fetch   = require("node-fetch");
 require("dotenv").config();
 
-const REDIRECT_BASE = "http://localhost:5000";
+const REDIRECT_BASE = process.env.RAILWAY_URL || "http://localhost:5000";
 
 const getOAuthURL = (platform) => {
   switch (platform) {
     case "facebook":
       return `https://www.facebook.com/v18.0/dialog/oauth?client_id=${process.env.FACEBOOK_APP_ID}&redirect_uri=${REDIRECT_BASE}/auth/callback/facebook&scope=public_profile&response_type=code`;
     case "instagram":
-      return `https://www.instagram.com/oauth/authorize?client_id=${process.env.INSTAGRAM_CLIENT_ID}&redirect_uri=http://localhost:5000/auth/callback/instagram&scope=instagram_business_basic&response_type=code`;
+      return `https://www.instagram.com/oauth/authorize?client_id=${process.env.INSTAGRAM_CLIENT_ID}&redirect_uri=${REDIRECT_BASE}/auth/callback/instagram&scope=instagram_business_basic&response_type=code`;
     case "youtube":
       return `https://accounts.google.com/o/oauth2/auth?client_id=${process.env.YOUTUBE_CLIENT_ID}&redirect_uri=${REDIRECT_BASE}/auth/callback/youtube&scope=https://www.googleapis.com/auth/youtube&response_type=code`;
     case "tiktok":
