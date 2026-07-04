@@ -9,7 +9,7 @@ const REDIRECT_BASE = process.env.RAILWAY_URL || "http://localhost:5000";
 const getOAuthURL = (platform) => {
   switch (platform) {
     case "facebook":
-      return `https://www.facebook.com/v18.0/dialog/oauth?client_id=${process.env.FACEBOOK_APP_ID}&redirect_uri=${REDIRECT_BASE}/auth/callback/facebook&scope=public_profile&response_type=code`;
+      return `https://www.facebook.com/v18.0/dialog/oauth?client_id=${process.env.FACEBOOK_APP_ID}&redirect_uri=${REDIRECT_BASE}/auth/callback/facebook&scope=public_profile,pages_manage_posts,pages_read_engagement,pages_show_list&response_type=code&auth_type=rerequest`;
     case "instagram":
       return `https://www.instagram.com/oauth/authorize?client_id=${process.env.INSTAGRAM_CLIENT_ID}&redirect_uri=${REDIRECT_BASE}/auth/callback/instagram&scope=instagram_business_basic&response_type=code`;
     case "youtube":
@@ -52,9 +52,9 @@ router.get("/instagram/verify", async (req, res) => {
 
     console.log("✅ Instagram connected:", data.username);
     res.json({
-      success: true,
+      success:  true,
       username: data.username,
-      message: "Instagram connected successfully!"
+      message:  "Instagram connected successfully!"
     });
 
   } catch (err) {
@@ -78,23 +78,73 @@ router.get("/callback/:platform", async (req, res) => {
 
   if (!code) {
     return res.send(`
-      <html>
-        <body>
-          <script>
-            if (window.opener) {
-              window.opener.postMessage(
-                { type: "OAUTH_ERROR", platform: "${platform}" },
-                "*"
-              );
-            }
-            window.close();
-          </script>
-        </body>
-      </html>
+      <html><body>
+        <script>
+          if (window.opener) {
+            window.opener.postMessage(
+              { type: "OAUTH_ERROR", platform: "${platform}" }, "*"
+            );
+          }
+          window.close();
+        </script>
+      </body></html>
     `);
   }
 
   try {
+    let accessToken = code; // fallback — will be replaced below
+
+    // ── Exchange code for real access token ──────────────
+
+    if (platform === "facebook") {
+      console.log("🔄 Exchanging Facebook code for real token...");
+
+      const tokenRes  = await fetch(
+        `https://graph.facebook.com/v18.0/oauth/access_token?` +
+        `client_id=${process.env.FACEBOOK_APP_ID}` +
+        `&client_secret=${process.env.FACEBOOK_APP_SECRET}` +
+        `&redirect_uri=${REDIRECT_BASE}/auth/callback/facebook` +
+        `&code=${code}`
+      );
+      const tokenData = await tokenRes.json();
+
+      if (tokenData.error) {
+        throw new Error(`Facebook token error: ${tokenData.error.message}`);
+      }
+
+      accessToken = tokenData.access_token;
+      console.log("✅ Facebook real access token received!");
+    }
+
+    if (platform === "instagram") {
+      console.log("🔄 Exchanging Instagram code for real token...");
+
+      const tokenRes  = await fetch(
+        `https://api.instagram.com/oauth/access_token`,
+        {
+          method:  "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            client_id:     process.env.INSTAGRAM_CLIENT_ID,
+            client_secret: process.env.INSTAGRAM_CLIENT_SECRET,
+            grant_type:    "authorization_code",
+            redirect_uri:  `${REDIRECT_BASE}/auth/callback/instagram`,
+            code,
+          }),
+        }
+      );
+      const tokenData = await tokenRes.json();
+
+      if (tokenData.error_type) {
+        throw new Error(`Instagram token error: ${tokenData.error_message}`);
+      }
+
+      accessToken = tokenData.access_token;
+      console.log("✅ Instagram real access token received!");
+    }
+
+    // ── Save to PostgreSQL ──────────────────────────────
+
     await pool.query(
       `INSERT INTO connections (user_id, platform)
        VALUES ($1, $2)
@@ -108,53 +158,46 @@ router.get("/callback/:platform", async (req, res) => {
        VALUES ($1, $2, $3)
        ON CONFLICT (user_id, platform) DO UPDATE
        SET access_token = $3`,
-      [1, platform, code]
+      [1, platform, accessToken]
     );
 
-    console.log(`✅ ${platform} connected and saved to database!`);
+    console.log(`✅ ${platform} real token saved to database!`);
 
-    // ← KEY FIX: redirect to frontend success page directly
     const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 
     res.send(`
-      <html>
-        <body>
-          <p>✅ ${platform} connected! Closing...</p>
-          <script>
-            function sendAndClose() {
-              if (window.opener) {
-                window.opener.postMessage(
-                  { type: "OAUTH_SUCCESS", platform: "${platform}" },
-                  "*"
-                );
-                setTimeout(() => window.close(), 1000);
-              } else {
-                window.location.href = "${FRONTEND_URL}/success/${platform}";
-              }
+      <html><body>
+        <p>✅ ${platform} connected! Closing...</p>
+        <script>
+          function sendAndClose() {
+            if (window.opener) {
+              window.opener.postMessage(
+                { type: "OAUTH_SUCCESS", platform: "${platform}" }, "*"
+              );
+              setTimeout(() => window.close(), 1000);
+            } else {
+              window.location.href = "${FRONTEND_URL}/success/${platform}";
             }
-            sendAndClose();
-          </script>
-        </body>
-      </html>
+          }
+          sendAndClose();
+        </script>
+      </body></html>
     `);
 
   } catch (err) {
-    console.error(`❌ Failed to save ${platform} connection:`, err.message);
+    console.error(`❌ Failed to save ${platform}:`, err.message);
     res.send(`
-      <html>
-        <body>
-          <script>
-            if (window.opener) {
-              window.opener.postMessage(
-                { type: "OAUTH_ERROR", platform: "${platform}" },
-                "*"
-              );
-            }
-            window.close();
-          </script>
-          <p>Error saving connection</p>
-        </body>
-      </html>
+      <html><body>
+        <script>
+          if (window.opener) {
+            window.opener.postMessage(
+              { type: "OAUTH_ERROR", platform: "${platform}" }, "*"
+            );
+          }
+          window.close();
+        </script>
+        <p>Error: ${err.message}</p>
+      </body></html>
     `);
   }
 });
