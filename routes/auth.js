@@ -9,7 +9,7 @@ const REDIRECT_BASE = process.env.RAILWAY_URL || "http://localhost:5000";
 const getOAuthURL = (platform) => {
   switch (platform) {
     case "facebook":
-      return `https://www.facebook.com/v18.0/dialog/oauth?client_id=${process.env.FACEBOOK_APP_ID}&redirect_uri=${REDIRECT_BASE}/auth/callback/facebook&scope=public_profile,pages_manage_posts,pages_read_engagement,pages_show_list&response_type=code&auth_type=rerequest`;
+      return `https://www.facebook.com/v18.0/dialog/oauth?client_id=${process.env.FACEBOOK_APP_ID}&redirect_uri=${REDIRECT_BASE}/auth/callback/facebook&scope=public_profile,pages_manage_posts,pages_read_engagement&response_type=code`;
     case "instagram":
       return `https://www.instagram.com/oauth/authorize?client_id=${process.env.INSTAGRAM_CLIENT_ID}&redirect_uri=${REDIRECT_BASE}/auth/callback/instagram&scope=instagram_business_basic&response_type=code`;
     case "youtube":
@@ -98,6 +98,9 @@ router.get("/callback/:platform", async (req, res) => {
 
     if (platform === "facebook") {
       console.log("🔄 Exchanging Facebook code for real token...");
+      const tokenRes = await fetch(
+        `https://graph.facebook.com/v18.0/oauth/access_token?...`
+      );
 
       const tokenRes  = await fetch(
         `https://graph.facebook.com/v18.0/oauth/access_token?` +
