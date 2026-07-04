@@ -9,7 +9,7 @@ const REDIRECT_BASE = process.env.RAILWAY_URL || "http://localhost:5000";
 const getOAuthURL = (platform) => {
   switch (platform) {
     case "facebook":
-      return `https://www.facebook.com/v18.0/dialog/oauth?client_id=${process.env.FACEBOOK_APP_ID}&redirect_uri=${REDIRECT_BASE}/auth/callback/facebook&scope=public_profile,pages_manage_posts,pages_read_engagement&response_type=code`;
+      return `https://www.facebook.com/v18.0/dialog/oauth?client_id=${process.env.FACEBOOK_APP_ID}&redirect_uri=${REDIRECT_BASE}/auth/callback/facebook&scope=public_profile,pages_manage_posts,pages_read_engagement,pages_show_list&response_type=code&auth_type=rerequest`;
     case "instagram":
       return `https://www.instagram.com/oauth/authorize?client_id=${process.env.INSTAGRAM_CLIENT_ID}&redirect_uri=${REDIRECT_BASE}/auth/callback/instagram&scope=instagram_business_basic&response_type=code`;
     case "youtube":
@@ -92,37 +92,34 @@ router.get("/callback/:platform", async (req, res) => {
   }
 
   try {
-    let accessToken = code; // fallback — will be replaced below
+    let accessToken = code;
 
-    // ── Exchange code for real access token ──────────────
-
+    // Exchange Facebook code for real access token
     if (platform === "facebook") {
       console.log("🔄 Exchanging Facebook code for real token...");
-      const tokenRes = await fetch(
-        `https://graph.facebook.com/v18.0/oauth/access_token?...`
-      );
 
-      const tokenRes  = await fetch(
+      const fbRes  = await fetch(
         `https://graph.facebook.com/v18.0/oauth/access_token?` +
         `client_id=${process.env.FACEBOOK_APP_ID}` +
         `&client_secret=${process.env.FACEBOOK_APP_SECRET}` +
         `&redirect_uri=${REDIRECT_BASE}/auth/callback/facebook` +
         `&code=${code}`
       );
-      const tokenData = await tokenRes.json();
+      const fbData = await fbRes.json();
 
-      if (tokenData.error) {
-        throw new Error(`Facebook token error: ${tokenData.error.message}`);
+      if (fbData.error) {
+        throw new Error(`Facebook token error: ${fbData.error.message}`);
       }
 
-      accessToken = tokenData.access_token;
+      accessToken = fbData.access_token;
       console.log("✅ Facebook real access token received!");
     }
 
+    // Exchange Instagram code for real access token
     if (platform === "instagram") {
       console.log("🔄 Exchanging Instagram code for real token...");
 
-      const igTokenRes  = await fetch(
+      const igRes  = await fetch(
         `https://api.instagram.com/oauth/access_token`,
         {
           method:  "POST",
@@ -136,18 +133,17 @@ router.get("/callback/:platform", async (req, res) => {
           }),
         }
       );
-      const igTokenData = await igTokenRes.json();
+      const igData = await igRes.json();
 
-      if (igTokenData.error_type) {
-        throw new Error(`Instagram token error: ${igTokenData.error_message}`);
+      if (igData.error_type) {
+        throw new Error(`Instagram token error: ${igData.error_message}`);
       }
 
-      accessToken = igTokenData.access_token;
+      accessToken = igData.access_token;
       console.log("✅ Instagram real access token received!");
     }
 
-    // ── Save to PostgreSQL ──────────────────────────────
-
+    // Save connection to PostgreSQL
     await pool.query(
       `INSERT INTO connections (user_id, platform)
        VALUES ($1, $2)
@@ -156,6 +152,7 @@ router.get("/callback/:platform", async (req, res) => {
       [1, platform]
     );
 
+    // Save real access token
     await pool.query(
       `INSERT INTO oauth_tokens (user_id, platform, access_token)
        VALUES ($1, $2, $3)
