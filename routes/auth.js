@@ -122,7 +122,7 @@ router.get("/callback/:platform", async (req, res) => {
     if (platform === "instagram") {
       console.log("🔄 Exchanging Instagram code for real token...");
 
-      const tokenRes  = await fetch(
+      const igTokenRes  = await fetch(
         `https://api.instagram.com/oauth/access_token`,
         {
           method:  "POST",
@@ -136,13 +136,13 @@ router.get("/callback/:platform", async (req, res) => {
           }),
         }
       );
-      const tokenData = await tokenRes.json();
+      const igTokenData = await igTokenRes.json();
 
-      if (tokenData.error_type) {
-        throw new Error(`Instagram token error: ${tokenData.error_message}`);
+      if (igTokenData.error_type) {
+        throw new Error(`Instagram token error: ${igTokenData.error_message}`);
       }
 
-      accessToken = tokenData.access_token;
+      accessToken = igTokenData.access_token;
       console.log("✅ Instagram real access token received!");
     }
 
