@@ -98,6 +98,8 @@ router.get("/callback/:platform", async (req, res) => {
     if (platform === "facebook") {
       console.log("🔄 Exchanging Facebook code for real token...");
 
+      const decodedCode = decodeURIComponent(code);
+
       const fbRes  = await fetch(
         `https://graph.facebook.com/v18.0/oauth/access_token?` +
         `client_id=${process.env.FACEBOOK_APP_ID}` +
