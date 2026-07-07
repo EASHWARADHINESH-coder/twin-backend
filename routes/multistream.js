@@ -139,37 +139,29 @@ router.get("/history", async (req, res) => {
 // ── Platform RTMP functions ──────────────────────────
 
 async function getFacebookRTMP(accessToken, title) {
-  console.log("🔍 Getting Facebook Pages...");
+  console.log("🔍 Getting Facebook Page token...");
 
-  // Try getting pages from API first
-  const pagesRes  = await fetch(
-    `https://graph.facebook.com/v18.0/me/accounts?access_token=${accessToken}`
-  );
-  const pagesData = await pagesRes.json();
-  console.log("📄 Facebook pages response:", JSON.stringify(pagesData));
+  const pageId = process.env.FACEBOOK_PAGE_ID;
 
-  let pageId;
-  let pageAccessToken;
-
-  if (pagesData.data && pagesData.data.length > 0) {
-    // Use first page from API response
-    pageId           = pagesData.data[0].id;
-    pageAccessToken  = pagesData.data[0].access_token;
-    console.log(`📺 Using page from API: ${pagesData.data[0].name} (${pageId})`);
-  } else {
-    // Fallback — use FACEBOOK_PAGE_ID from environment variable
-    pageId          = process.env.FACEBOOK_PAGE_ID;
-    pageAccessToken = accessToken;
-    console.log(`📺 Using Page ID from env: ${pageId}`);
-
-    if (!pageId) {
-      throw new Error(
-        "No Facebook Pages found. Please add FACEBOOK_PAGE_ID to your Railway environment variables."
-      );
-    }
+  if (!pageId) {
+    throw new Error("FACEBOOK_PAGE_ID not set in environment variables");
   }
 
-  // Create live video on the page
+  // Get Page-specific access token
+  const pageTokenRes  = await fetch(
+    `https://graph.facebook.com/v18.0/${pageId}?fields=access_token&access_token=${accessToken}`
+  );
+  const pageTokenData = await pageTokenRes.json();
+  console.log("🔑 Page token response:", JSON.stringify(pageTokenData));
+
+  if (pageTokenData.error) {
+    throw new Error(`Failed to get page token: ${pageTokenData.error.message}`);
+  }
+
+  const pageAccessToken = pageTokenData.access_token || accessToken;
+  console.log(`📺 Got Page token for page: ${pageId}`);
+
+  // Create live video using Page token
   console.log(`🎥 Creating live video on page ${pageId}...`);
   const liveRes  = await fetch(
     `https://graph.facebook.com/v18.0/${pageId}/live_videos`,
@@ -193,17 +185,15 @@ async function getFacebookRTMP(accessToken, title) {
   }
 
   if (!liveData.stream_url) {
-    throw new Error("Facebook did not return a stream URL. Make sure your app has live_video permission.");
+    throw new Error("Facebook did not return a stream URL");
   }
 
-  // Split stream_url into RTMP URL and Stream Key
   const fullUrl   = liveData.stream_url;
   const lastSlash = fullUrl.lastIndexOf("/");
   const rtmpUrl   = fullUrl.substring(0, lastSlash);
   const streamKey = fullUrl.substring(lastSlash + 1);
 
-  console.log(`✅ Facebook RTMP ready! URL: ${rtmpUrl}`);
-
+  console.log(`✅ Facebook RTMP ready!`);
   return { streamId: liveData.id, rtmpUrl, streamKey };
 }
 
