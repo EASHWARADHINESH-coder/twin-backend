@@ -107,6 +107,8 @@ router.get("/callback/:platform", async (req, res) => {
       );
       const fbData = await fbRes.json();
 
+      console.log("📋 Facebook token response:", JSON.stringify(fbData));
+
       if (fbData.error) {
         throw new Error(`Facebook token error: ${fbData.error.message}`);
       }
