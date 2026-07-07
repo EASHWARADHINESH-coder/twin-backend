@@ -4,11 +4,9 @@ const pool    = require("../db");
 const fetch   = require("node-fetch");
 
 // GET /multistream/platforms
-// Get all connected platforms for a user
 router.get("/platforms", async (req, res) => {
   try {
     const { userId } = req.query;
-
     const result = await pool.query(
       `SELECT c.platform, c.connected_at,
               CASE WHEN ot.access_token IS NOT NULL
@@ -19,9 +17,7 @@ router.get("/platforms", async (req, res) => {
        WHERE c.user_id = $1`,
       [userId]
     );
-
     res.json({ platforms: result.rows });
-
   } catch (err) {
     console.error("Get platforms error:", err.message);
     res.status(500).json({ error: "Failed to get platforms" });
@@ -29,7 +25,6 @@ router.get("/platforms", async (req, res) => {
 });
 
 // POST /multistream/start
-// Start multistream on all connected platforms
 router.post("/start", async (req, res) => {
   try {
     const { userId, title, platforms } = req.body;
@@ -38,13 +33,11 @@ router.post("/start", async (req, res) => {
       return res.status(400).json({ error: "userId and platforms are required" });
     }
 
-    const results  = [];
-    const errors   = [];
+    const results = [];
+    const errors  = [];
 
-    // Process each platform
     for (const platform of platforms) {
       try {
-        // Get access token
         const tokenResult = await pool.query(
           "SELECT access_token FROM oauth_tokens WHERE user_id = $1 AND platform = $2",
           [userId, platform]
@@ -72,7 +65,6 @@ router.post("/start", async (req, res) => {
           };
         }
 
-        // Save session to database
         await pool.query(
           `INSERT INTO live_sessions
            (user_id, platform, stream_id, rtmp_url, stream_key, title, status)
@@ -112,21 +104,16 @@ router.post("/start", async (req, res) => {
 });
 
 // POST /multistream/stop
-// Stop all active streams
 router.post("/stop", async (req, res) => {
   try {
     const { userId } = req.body;
-
-    // Update all active sessions to ended
     await pool.query(
       `UPDATE live_sessions
        SET status = 'ended', ended_at = CURRENT_TIMESTAMP
        WHERE user_id = $1 AND status = 'active'`,
       [userId]
     );
-
     res.json({ success: true, message: "All streams ended!" });
-
   } catch (err) {
     console.error("Stop multistream error:", err.message);
     res.status(500).json({ error: "Failed to stop streams" });
@@ -134,20 +121,16 @@ router.post("/stop", async (req, res) => {
 });
 
 // GET /multistream/history
-// Get stream history
 router.get("/history", async (req, res) => {
   try {
     const { userId } = req.query;
-
     const result = await pool.query(
       `SELECT * FROM live_sessions
        WHERE user_id = $1
        ORDER BY created_at DESC LIMIT 20`,
       [userId]
     );
-
     res.json({ history: result.rows });
-
   } catch (err) {
     res.status(500).json({ error: "Failed to get history" });
   }
@@ -156,27 +139,38 @@ router.get("/history", async (req, res) => {
 // ── Platform RTMP functions ──────────────────────────
 
 async function getFacebookRTMP(accessToken, title) {
-  // Get Facebook Pages
+  console.log("🔍 Getting Facebook Pages...");
+
+  // Try getting pages from API first
   const pagesRes  = await fetch(
     `https://graph.facebook.com/v18.0/me/accounts?access_token=${accessToken}`
   );
   const pagesData = await pagesRes.json();
+  console.log("📄 Facebook pages response:", JSON.stringify(pagesData));
 
-  if (pagesData.error) {
-    throw new Error(`Facebook: ${pagesData.error.message}`);
+  let pageId;
+  let pageAccessToken;
+
+  if (pagesData.data && pagesData.data.length > 0) {
+    // Use first page from API response
+    pageId           = pagesData.data[0].id;
+    pageAccessToken  = pagesData.data[0].access_token;
+    console.log(`📺 Using page from API: ${pagesData.data[0].name} (${pageId})`);
+  } else {
+    // Fallback — use FACEBOOK_PAGE_ID from environment variable
+    pageId          = process.env.FACEBOOK_PAGE_ID;
+    pageAccessToken = accessToken;
+    console.log(`📺 Using Page ID from env: ${pageId}`);
+
+    if (!pageId) {
+      throw new Error(
+        "No Facebook Pages found. Please add FACEBOOK_PAGE_ID to your Railway environment variables."
+      );
+    }
   }
 
-  if (!pagesData.data || pagesData.data.length === 0) {
-    throw new Error("No Facebook Page found. Create a Facebook Page first at facebook.com/pages/create");
-  }
-
-  const page            = pagesData.data[0];
-  const pageAccessToken = page.access_token;
-  const pageId          = page.id;
-
-  console.log(`📺 Facebook Page: ${page.name} (${pageId})`);
-
-  // Create live video
+  // Create live video on the page
+  console.log(`🎥 Creating live video on page ${pageId}...`);
   const liveRes  = await fetch(
     `https://graph.facebook.com/v18.0/${pageId}/live_videos`,
     {
@@ -192,16 +186,23 @@ async function getFacebookRTMP(accessToken, title) {
   );
 
   const liveData = await liveRes.json();
+  console.log("🎥 Facebook Live response:", JSON.stringify(liveData));
 
   if (liveData.error) {
     throw new Error(`Facebook Live: ${liveData.error.message}`);
   }
 
+  if (!liveData.stream_url) {
+    throw new Error("Facebook did not return a stream URL. Make sure your app has live_video permission.");
+  }
+
   // Split stream_url into RTMP URL and Stream Key
-  const fullUrl   = liveData.stream_url || "";
+  const fullUrl   = liveData.stream_url;
   const lastSlash = fullUrl.lastIndexOf("/");
   const rtmpUrl   = fullUrl.substring(0, lastSlash);
   const streamKey = fullUrl.substring(lastSlash + 1);
+
+  console.log(`✅ Facebook RTMP ready! URL: ${rtmpUrl}`);
 
   return { streamId: liveData.id, rtmpUrl, streamKey };
 }
@@ -220,6 +221,7 @@ async function getInstagramRTMP(accessToken, title) {
     }
   );
   const data = await res.json();
+  console.log("📸 Instagram Live response:", JSON.stringify(data));
 
   if (data.error) {
     throw new Error(`Instagram Live: ${data.error.message}`);
@@ -234,7 +236,6 @@ async function getInstagramRTMP(accessToken, title) {
 }
 
 async function getYoutubeRTMP(accessToken, title) {
-  // Create YouTube live stream
   const streamRes  = await fetch(
     "https://www.googleapis.com/youtube/v3/liveStreams?part=snippet,cdn,status",
     {
@@ -255,12 +256,12 @@ async function getYoutubeRTMP(accessToken, title) {
   );
 
   const streamData = await streamRes.json();
+  console.log("▶️ YouTube stream response:", JSON.stringify(streamData));
 
   if (streamData.error) {
     throw new Error(`YouTube: ${streamData.error.message}`);
   }
 
-  // Bind broadcast to stream
   const broadcastRes  = await fetch(
     "https://www.googleapis.com/youtube/v3/liveBroadcasts?part=snippet,status,contentDetails",
     {
@@ -271,7 +272,7 @@ async function getYoutubeRTMP(accessToken, title) {
       },
       body: JSON.stringify({
         snippet: {
-          title,
+          title: title || "Twinn AI Live",
           scheduledStartTime: new Date().toISOString(),
         },
         status:         { privacyStatus: "public" },
@@ -281,6 +282,11 @@ async function getYoutubeRTMP(accessToken, title) {
   );
 
   const broadcastData = await broadcastRes.json();
+  console.log("▶️ YouTube broadcast response:", JSON.stringify(broadcastData));
+
+  if (broadcastData.error) {
+    throw new Error(`YouTube broadcast: ${broadcastData.error.message}`);
+  }
 
   return {
     streamId:  broadcastData.id,
