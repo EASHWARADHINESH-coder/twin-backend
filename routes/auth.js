@@ -13,7 +13,7 @@ const getOAuthURL = (platform) => {
     case "instagram":
       return `https://www.instagram.com/oauth/authorize?client_id=${process.env.INSTAGRAM_CLIENT_ID}&redirect_uri=${REDIRECT_BASE}/auth/callback/instagram&scope=instagram_business_basic&response_type=code`;
     case "youtube":
-      return `https://accounts.google.com/o/oauth2/auth?client_id=${process.env.YOUTUBE_CLIENT_ID}&redirect_uri=${REDIRECT_BASE}/auth/callback/youtube&scope=https://www.googleapis.com/auth/youtube&response_type=code`;
+      return `https://accounts.google.com/o/oauth2/auth?client_id=${process.env.YOUTUBE_CLIENT_ID}&redirect_uri=${REDIRECT_BASE}/auth/callback/youtube&scope=https://www.googleapis.com/auth/youtube&response_type=code&access_type=offline`;
     case "tiktok":
       return `https://www.tiktok.com/auth/authorize/?client_key=${process.env.TIKTOK_CLIENT_KEY}&redirect_uri=${REDIRECT_BASE}/auth/callback/tiktok&scope=user.info.basic&response_type=code`;
     default:
@@ -145,6 +145,35 @@ router.get("/callback/:platform", async (req, res) => {
 
       accessToken = igData.access_token;
       console.log("✅ Instagram real access token received!");
+    }
+
+    // Exchange YouTube code for real access token
+    if (platform === "youtube") {
+      console.log("🔄 Exchanging YouTube code for real token...");
+
+      const ytRes  = await fetch(
+        `https://oauth2.googleapis.com/token`,
+        {
+          method:  "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            client_id:     process.env.YOUTUBE_CLIENT_ID,
+            client_secret: process.env.YOUTUBE_CLIENT_SECRET,
+            redirect_uri:  `${REDIRECT_BASE}/auth/callback/youtube`,
+            grant_type:    "authorization_code",
+            code,
+          }),
+        }
+      );
+      const ytData = await ytRes.json();
+      console.log("📋 YouTube token response:", JSON.stringify(ytData));
+
+      if (ytData.error) {
+        throw new Error(`YouTube token error: ${ytData.error_description || ytData.error}`);
+      }
+
+      accessToken = ytData.access_token;
+      console.log("✅ YouTube real access token received!");
     }
 
     // Save connection to PostgreSQL
