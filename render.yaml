@@ -1,0 +1,39 @@
+# Render Blueprint for twin-backend
+# Deploy: https://render.com  ->  New +  ->  Blueprint  ->  connect this repo.
+# Render reads this file and provisions the service automatically.
+#
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: twin-backend
+    runtime: node
+    region: singapore          # closest Render region to India
+    plan: free                 # free instance (sleeps after ~15 min idle)
+    branch: main
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /
+    autoDeploy: true           # redeploy automatically on git push
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+
+      # --- Required: PostgreSQL connection string ---------------------
+      # Paste your Neon (or any) Postgres URL when Render prompts you.
+      # Example: postgresql://user:pass@ep-xxxx.ap-southeast-1.aws.neon.tech/neondb?sslmode=require
+      - key: DATABASE_URL
+        sync: false
+
+      # --- Frontend origin allowed by CORS ---------------------------
+      # Your frontend URL, or "*" to allow all while testing.
+      - key: FRONTEND_URL
+        sync: false
+
+      # --- Optional: OAuth credentials -------------------------------
+      # Add these in the Render dashboard (Environment tab) only when you
+      # wire up each platform. The server runs fine without them.
+      # FACEBOOK_APP_ID, FACEBOOK_APP_SECRET
+      # INSTAGRAM_CLIENT_ID, INSTAGRAM_CLIENT_SECRET, INSTAGRAM_ACCESS_TOKEN
+      # YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET
+      # TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET
