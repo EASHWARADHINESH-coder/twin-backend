@@ -3,6 +3,12 @@ const router  = express.Router();
 const pool    = require("../db");
 const fetch   = require("node-fetch");
 
+// Latest relay status per user, pushed by the local relay's heartbeat.
+// Kept in memory on purpose: this is transient live data, so we avoid writing
+// to the database every few seconds. Lost on restart; repopulated on next beat.
+const relayStatus = new Map(); // userId(string) -> { ...status, receivedAt }
+const RELAY_STALE_MS = 15000;  // no heartbeat for this long => relay is offline
+
 // GET /multistream/platforms
 router.get("/platforms", async (req, res) => {
   try {
@@ -212,6 +218,83 @@ router.get("/targets", async (req, res) => {
     console.error("Get targets error:", err.message);
     res.status(500).json({ error: "Failed to get targets" });
   }
+});
+
+// POST /multistream/status — the local relay pushes a status heartbeat here.
+// Body: { userId, publishing/running, destinations, ... } (never stream keys).
+// Optional shared secret: set RELAY_STATUS_TOKEN and send it as x-relay-token.
+router.post("/status", (req, res) => {
+  const token = process.env.RELAY_STATUS_TOKEN;
+  if (token && req.headers["x-relay-token"] !== token) {
+    return res.status(401).json({ error: "Invalid relay token" });
+  }
+
+  const { userId, ...status } = req.body || {};
+  if (!userId) {
+    return res.status(400).json({ error: "userId is required" });
+  }
+
+  relayStatus.set(String(userId), { ...status, receivedAt: Date.now() });
+  res.json({ success: true });
+});
+
+// GET /multistream/status?userId=1 — frontend/cloud reads the latest relay
+// status. `online` is false when the last heartbeat is stale (or never sent).
+router.get("/status", (req, res) => {
+  const { userId } = req.query;
+  if (!userId) {
+    return res.status(400).json({ error: "userId is required" });
+  }
+
+  const s = relayStatus.get(String(userId));
+  if (!s) {
+    return res.json({ online: false, relay: null });
+  }
+
+  const ageMs = Date.now() - s.receivedAt;
+  res.json({
+    online: ageMs < RELAY_STALE_MS,
+    ageSec: Math.round(ageMs / 1000),
+    relay:  s,
+  });
+});
+
+// GET /multistream/monitor?userId=1 — a cloud dashboard (served by Render) that
+// polls /multistream/status, so you can watch the relay from anywhere.
+router.get("/monitor", (req, res) => {
+  const userId = String(req.query.userId || "1");
+  res.type("html").send(`<!doctype html><html><head><meta charset="utf-8">
+<title>Twinn Relay Monitor</title><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+ body{font-family:system-ui,sans-serif;margin:2rem;background:#0f1216;color:#e6e6e6}
+ h1{font-size:1.3rem} .pill{padding:.2rem .6rem;border-radius:1rem;font-size:.85rem}
+ .on{background:#1b5e20} .off{background:#5e1b1b}
+ table{border-collapse:collapse;margin-top:1rem;width:100%;max-width:640px}
+ th,td{text-align:left;padding:.5rem .75rem;border-bottom:1px solid #2a2f36}
+ .live{color:#66bb6a} .reconnecting{color:#ffa726} .stopped{color:#9e9e9e}
+ .muted{color:#8892a0;font-size:.85rem}
+</style></head><body>
+<h1>📡 Twinn Relay Monitor <span id="pill" class="pill off">…</span></h1>
+<div class="muted">user ${userId} · relay heartbeat: <span id="beat">–</span> · auto-refresh 3s</div>
+<table><thead><tr><th>Destination</th><th>Status</th><th>Uptime</th><th>Restarts</th><th>Last exit</th></tr></thead>
+<tbody id="rows"><tr><td colspan="5" class="muted">loading…</td></tr></tbody></table>
+<script>
+ async function tick(){
+  try{
+   const r=await (await fetch('/multistream/status?userId=${userId}')).json();
+   const pill=document.getElementById('pill');
+   const rel=r.relay||{};
+   const pub=r.online&&(rel.publishing||rel.running);
+   pill.textContent=!r.online?'relay offline':(pub?'streaming':'relay up, idle');
+   pill.className='pill '+(pub?'on':'off');
+   document.getElementById('beat').textContent=r.online?(r.ageSec+'s ago'):'stale';
+   const dests=rel.destinations||[];
+   const rows=dests.map(function(d){return '<tr><td>'+d.platform+'</td><td class="'+d.status+'">'+d.status+'</td><td>'+(d.uptimeSec||0)+'s</td><td>'+(d.restarts||0)+'</td><td>'+(d.lastExitCode==null?'–':d.lastExitCode)+'</td></tr>';}).join('');
+   document.getElementById('rows').innerHTML=rows||'<tr><td colspan="5" class="muted">'+(r.online?'no destinations yet':'waiting for relay heartbeat')+'</td></tr>';
+  }catch(e){document.getElementById('pill').textContent='error';}
+ }
+ tick();setInterval(tick,3000);
+</script></body></html>`);
 });
 
 // GET /multistream/rtmp?userId=1 — list saved RTMP destinations

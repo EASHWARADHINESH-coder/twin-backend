@@ -39,6 +39,9 @@ const INPUT   = process.env.RELAY_INPUT || "rtmp://0.0.0.0:1935/live/twinn";
 const STATUS_PORT = Number(process.env.STATUS_PORT || 8080);
 const RELAY_STARTED_AT = Date.now();
 
+// Heartbeat: push status up to the Render backend (0 disables).
+const STATUS_PUSH_MS = Number(process.env.STATUS_PUSH_INTERVAL || 5000);
+
 // Backoff tuning
 const BASE_BACKOFF_MS = 1000;   // first retry delay
 const MAX_BACKOFF_MS  = 15000;  // cap
@@ -91,8 +94,25 @@ const statusServer = http.createServer((req, res) => {
   }
 });
 statusServer.listen(STATUS_PORT, () => {
-  console.log(`📊 Status: http://localhost:${STATUS_PORT}/status  (health: /health)`);
+  console.log(`📊 Local status: http://localhost:${STATUS_PORT}/status  (health: /health)`);
 });
+
+// Push a status heartbeat to the Render backend (no stream keys included).
+async function pushStatus() {
+  try {
+    const headers = { "Content-Type": "application/json" };
+    if (process.env.RELAY_STATUS_TOKEN) headers["x-relay-token"] = process.env.RELAY_STATUS_TOKEN;
+    await fetch(`${BACKEND}/multistream/status`, {
+      method:  "POST",
+      headers,
+      body:    JSON.stringify({ userId: USER_ID, ...buildStatus() }),
+    });
+  } catch (_) { /* backend unreachable — ignore, retry next beat */ }
+}
+if (STATUS_PUSH_MS > 0) {
+  setInterval(pushStatus, STATUS_PUSH_MS);
+  console.log(`☁️  Cloud monitor: ${BACKEND}/multistream/monitor?userId=${USER_ID}`);
+}
 
 async function getTargets() {
   const res = await fetch(`${BACKEND}/multistream/targets?userId=${USER_ID}`);

@@ -41,6 +41,10 @@ const STREAM_PATH = process.env.STREAM_PATH || "/live/twinn";
 const LOCAL_PULL  = `rtmp://127.0.0.1:${RTMP_PORT}${STREAM_PATH}`;
 const RELAY_STARTED_AT = Date.now();
 
+// Heartbeat: push status up to the Render backend so it can be watched in the
+// cloud. Set to 0 to disable. Optional shared secret via RELAY_STATUS_TOKEN.
+const STATUS_PUSH_MS = Number(process.env.STATUS_PUSH_INTERVAL || 5000);
+
 // Per-destination backoff tuning
 const BASE_BACKOFF_MS = 1000;   // first reconnect delay
 const MAX_BACKOFF_MS  = 15000;  // cap
@@ -235,10 +239,27 @@ nms.on("donePublish", (id, streamPath) => {
   stopAllPushers();
 });
 
+// Push a status heartbeat to the Render backend (no stream keys are included).
+async function pushStatus() {
+  try {
+    const headers = { "Content-Type": "application/json" };
+    if (process.env.RELAY_STATUS_TOKEN) headers["x-relay-token"] = process.env.RELAY_STATUS_TOKEN;
+    await fetch(`${BACKEND}/multistream/status`, {
+      method:  "POST",
+      headers,
+      body:    JSON.stringify({ userId: USER_ID, ...buildStatus() }),
+    });
+  } catch (_) { /* backend unreachable — ignore, retry next beat */ }
+}
+
+let heartbeat = null;
+
 nms.run();
 statusServer.listen(STATUS_PORT);
+if (STATUS_PUSH_MS > 0) heartbeat = setInterval(pushStatus, STATUS_PUSH_MS);
 console.log(`✅ Relay server listening on rtmp://0.0.0.0:${RTMP_PORT}`);
-console.log(`📊 Status dashboard: http://localhost:${STATUS_PORT}/   (JSON: /status, /health)`);
+console.log(`📊 Local status: http://localhost:${STATUS_PORT}/   (JSON: /status, /health)`);
+if (STATUS_PUSH_MS > 0) console.log(`☁️  Cloud monitor: ${BACKEND}/multistream/monitor?userId=${USER_ID}`);
 console.log(`👉 In OBS set  Server = rtmp://localhost:${RTMP_PORT}/live   Key = twinn`);
 console.log("   (Ctrl+C to stop the relay.)\n");
 
@@ -246,6 +267,7 @@ function shutdown() {
   console.log("\n🛑 Shutting down...");
   publishing = false;
   stopAllPushers();
+  if (heartbeat) clearInterval(heartbeat);
   try { statusServer.close(); } catch (_) { /* ignore */ }
   try { nms.stop(); } catch (_) { /* ignore */ }
   setTimeout(() => process.exit(0), 500);

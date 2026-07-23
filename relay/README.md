@@ -161,6 +161,27 @@ Example:
 curl http://localhost:8080/status
 ```
 
+## Watch it from the cloud (via Render)
+
+The relay also pushes a status **heartbeat** to the Render backend every 5s, so
+you can watch it from anywhere without exposing your local port. Only platform
+states are sent — **never stream keys**.
+
+- **Cloud dashboard:** open `https://your-app.onrender.com/multistream/monitor?userId=1`
+- **Cloud JSON (for your frontend):** `GET https://your-app.onrender.com/multistream/status?userId=1`
+  ```json
+  { "online": true, "ageSec": 2, "relay": { "publishing": true, "destinations": [ ... ] } }
+  ```
+  `online` flips to `false` when no heartbeat arrives for 15s (relay stopped or
+  offline). The backend keeps this in memory only — no database writes.
+
+Heartbeat env vars:
+
+| Variable              | Default | Purpose                                             |
+|-----------------------|---------|-----------------------------------------------------|
+| `STATUS_PUSH_INTERVAL`| `5000`  | Heartbeat interval in ms (`0` disables the push)    |
+| `RELAY_STATUS_TOKEN`  | *(none)*| Shared secret; sent as `x-relay-token`. Set the same value on the backend to reject unauthorized status pushes. |
+
 ## Environment variables
 
 | Variable      | Default                              | Purpose                          |
