@@ -36,32 +36,54 @@ router.post("/start", async (req, res) => {
     const results = [];
     const errors  = [];
 
+    // Platforms with an OAuth API that can create a broadcast programmatically.
+    // Everything else (e.g. Rooter) is a manual RTMP destination.
+    const API_PLATFORMS = ["facebook", "youtube", "instagram"];
+
     for (const platform of platforms) {
       try {
-        const tokenResult = await pool.query(
-          "SELECT access_token FROM oauth_tokens WHERE user_id = $1 AND platform = $2",
-          [userId, platform]
-        );
-
-        if (tokenResult.rows.length === 0) {
-          errors.push({ platform, error: "Not connected" });
-          continue;
-        }
-
-        const accessToken = tokenResult.rows[0].access_token;
         let streamData;
 
-        if (platform === "facebook") {
-          streamData = await getFacebookRTMP(accessToken, title);
-        } else if (platform === "youtube") {
-          streamData = await getYoutubeRTMP(accessToken, title);
-        } else if (platform === "instagram") {
-          streamData = await getInstagramRTMP(accessToken, title);
+        if (API_PLATFORMS.includes(platform)) {
+          const tokenResult = await pool.query(
+            "SELECT access_token FROM oauth_tokens WHERE user_id = $1 AND platform = $2",
+            [userId, platform]
+          );
+
+          if (tokenResult.rows.length === 0) {
+            errors.push({ platform, error: "Not connected" });
+            continue;
+          }
+
+          const accessToken = tokenResult.rows[0].access_token;
+
+          if (platform === "facebook") {
+            streamData = await getFacebookRTMP(accessToken, title);
+          } else if (platform === "youtube") {
+            streamData = await getYoutubeRTMP(accessToken, title);
+          } else {
+            streamData = await getInstagramRTMP(accessToken, title);
+          }
         } else {
+          // Custom RTMP destination (Rooter, etc.) — use the URL + key the
+          // user saved via POST /multistream/rtmp.
+          const rtmpResult = await pool.query(
+            "SELECT rtmp_url, stream_key FROM rtmp_destinations WHERE user_id = $1 AND platform = $2",
+            [userId, platform]
+          );
+
+          if (rtmpResult.rows.length === 0) {
+            errors.push({
+              platform,
+              error: "No RTMP settings saved. Add them via /multistream/rtmp first.",
+            });
+            continue;
+          }
+
           streamData = {
             streamId:  `${platform}_${Date.now()}`,
-            rtmpUrl:   `rtmp://live.${platform}.com/live`,
-            streamKey: "Get from app settings",
+            rtmpUrl:   rtmpResult.rows[0].rtmp_url,
+            streamKey: rtmpResult.rows[0].stream_key,
           };
         }
 
@@ -133,6 +155,62 @@ router.get("/history", async (req, res) => {
     res.json({ history: result.rows });
   } catch (err) {
     res.status(500).json({ error: "Failed to get history" });
+  }
+});
+
+// POST /multistream/rtmp — save a manual RTMP destination (e.g. Rooter).
+// Body: { userId, platform, rtmpUrl, streamKey }
+router.post("/rtmp", async (req, res) => {
+  try {
+    const { userId, platform, rtmpUrl, streamKey } = req.body;
+
+    if (!userId || !platform || !rtmpUrl || !streamKey) {
+      return res.status(400).json({
+        error: "userId, platform, rtmpUrl and streamKey are required",
+      });
+    }
+
+    // Save (or update) the RTMP credentials
+    await pool.query(
+      `INSERT INTO rtmp_destinations (user_id, platform, rtmp_url, stream_key)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_id, platform) DO UPDATE
+       SET rtmp_url = $3, stream_key = $4, updated_at = CURRENT_TIMESTAMP`,
+      [userId, platform, rtmpUrl, streamKey]
+    );
+
+    // Mark the platform as connected so the UI shows it
+    await pool.query(
+      `INSERT INTO connections (user_id, platform)
+       VALUES ($1, $2)
+       ON CONFLICT (user_id, platform) DO UPDATE
+       SET connected_at = CURRENT_TIMESTAMP`,
+      [userId, platform]
+    );
+
+    console.log(`✅ ${platform} RTMP settings saved!`);
+    res.json({ success: true, message: `${platform} RTMP settings saved!` });
+  } catch (err) {
+    console.error("Save RTMP error:", err.message);
+    res.status(500).json({ error: "Failed to save RTMP settings" });
+  }
+});
+
+// GET /multistream/rtmp?userId=1 — list saved RTMP destinations
+// (stream key is intentionally omitted from the response)
+router.get("/rtmp", async (req, res) => {
+  try {
+    const { userId } = req.query;
+    const result = await pool.query(
+      `SELECT platform, rtmp_url, updated_at
+       FROM rtmp_destinations
+       WHERE user_id = $1`,
+      [userId]
+    );
+    res.json({ destinations: result.rows });
+  } catch (err) {
+    console.error("Get RTMP error:", err.message);
+    res.status(500).json({ error: "Failed to get RTMP settings" });
   }
 });
 

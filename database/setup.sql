@@ -24,6 +24,32 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
   UNIQUE(user_id, platform)
 );
 
+-- Live streaming sessions (written by /multistream/start and /stop)
+CREATE TABLE IF NOT EXISTS live_sessions (
+  id         SERIAL PRIMARY KEY,
+  user_id    INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  platform   VARCHAR(50) NOT NULL,
+  stream_id  VARCHAR(255),
+  rtmp_url   TEXT,
+  stream_key TEXT,
+  title      VARCHAR(255),
+  status     VARCHAR(20) DEFAULT 'active',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  ended_at   TIMESTAMP
+);
+
+-- Manual RTMP destinations for platforms without an OAuth API (e.g. Rooter)
+CREATE TABLE IF NOT EXISTS rtmp_destinations (
+  id         SERIAL PRIMARY KEY,
+  user_id    INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  platform   VARCHAR(50) NOT NULL,
+  rtmp_url   TEXT NOT NULL,
+  stream_key TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(user_id, platform)
+);
+
 INSERT INTO users (email, name)
 VALUES ('test@twinn.com', 'Test User')
 ON CONFLICT (email) DO NOTHING;
