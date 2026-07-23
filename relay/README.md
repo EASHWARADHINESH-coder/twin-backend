@@ -62,8 +62,28 @@ OBS ──> relay (ffmpeg) ┼─> Facebook (rtmp + key)
 ```
 
 The relay calls `GET /multistream/targets?userId=<id>` to fetch the active
-session's destinations, then runs a single ffmpeg process that listens for OBS
-and copies the stream to each one.
+session's destinations, then runs a single ffmpeg process (using the `tee`
+muxer) that listens for OBS and copies the stream to each one.
+
+## Auto-restart & reconnect
+
+The relay is supervised so a hiccup doesn't end your stream:
+
+- **Whole-relay auto-restart** — if ffmpeg exits (OBS disconnects, a network
+  blip, or you started the relay before OBS / before `POST /multistream/start`),
+  the supervisor waits and restarts it automatically with exponential backoff
+  (1s → 2s → 4s … capped at 15s). A run that stays healthy for 30s+ resets the
+  backoff. On each restart it **re-fetches the targets**, so newly added or
+  recovered destinations rejoin.
+- **One bad destination won't kill the rest** — the `tee` muxer uses
+  `onfail=ignore`, so if a single platform rejects or drops (e.g. Rooter's
+  bitrate limit), the others keep streaming.
+- **Ctrl+C** stops the relay cleanly.
+
+> Note: with `onfail=ignore`, a destination that drops *mid-session* stays
+> dropped until the next ffmpeg restart (i.e. when OBS reconnects). For a fully
+> independent per-destination reconnect you'd run a dedicated RTMP server
+> (e.g. node-media-server) — ask if you want that upgrade.
 
 ## Environment variables
 
