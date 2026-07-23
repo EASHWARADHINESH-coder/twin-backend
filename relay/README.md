@@ -81,9 +81,61 @@ The relay is supervised so a hiccup doesn't end your stream:
 - **Ctrl+C** stops the relay cleanly.
 
 > Note: with `onfail=ignore`, a destination that drops *mid-session* stays
-> dropped until the next ffmpeg restart (i.e. when OBS reconnects). For a fully
-> independent per-destination reconnect you'd run a dedicated RTMP server
-> (e.g. node-media-server) — ask if you want that upgrade.
+> dropped until the next ffmpeg restart (i.e. when OBS reconnects). For fully
+> independent per-destination reconnect, use the node-media-server edition below.
+
+## Two relay editions
+
+| | `npm run relay` (ffmpeg only) | `npm run relay:nms` (node-media-server) |
+|---|---|---|
+| Extra dependency | none (just ffmpeg) | `node-media-server` (MIT, free) |
+| Fan-out | one ffmpeg, `tee` muxer | one ffmpeg **per destination** |
+| One platform drops | others survive, dropped one waits for OBS restart | **only that platform reconnects**, others untouched |
+| Best for | simplest setup | most resilient live streams |
+
+Both are free and run locally at $0. Pick one — you don't need both running.
+
+## node-media-server edition (per-destination reconnect)
+
+A local RTMP server accepts your single OBS stream and spawns an **independent**
+ffmpeg pusher for each destination. Each pusher is supervised on its own, so if
+one platform (e.g. Rooter) drops mid-stream, only its pusher restarts and
+rejoins — YouTube and Facebook keep streaming without interruption.
+
+```
+                    ┌── ffmpeg ──> YouTube   (own supervisor)
+OBS ──> NMS server ─┼── ffmpeg ──> Facebook  (own supervisor)
+   (port 1935)      └── ffmpeg ──> Rooter    (own supervisor ↺ reconnects alone)
+```
+
+### Setup
+
+1. Install deps (adds node-media-server):
+   ```bash
+   npm install
+   ```
+2. Install ffmpeg (free): https://ffmpeg.org/download.html
+3. Start the relay server:
+   ```bash
+   npm run relay:nms
+   ```
+   Against a deployed backend:
+   ```bash
+   BACKEND_URL=https://your-app.onrender.com USER_ID=1 npm run relay:nms
+   ```
+4. Start a multistream so the targets exist:
+   ```bash
+   curl -X POST http://localhost:5000/multistream/start \
+     -H "Content-Type: application/json" \
+     -d '{ "userId": 1, "title": "My Live", "platforms": ["youtube", "rooter"] }'
+   ```
+5. In OBS → Settings → Stream: Service = **Custom**,
+   Server = `rtmp://localhost:1935/live`, Stream Key = `twinn`.
+6. Click **Start Streaming**. When OBS connects, the relay reads the active
+   targets and starts one pusher per destination.
+
+Environment variables: same as above, plus `RTMP_PORT` (default `1935`) and
+`STREAM_PATH` (default `/live/twinn`).
 
 ## Environment variables
 
