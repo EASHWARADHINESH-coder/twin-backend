@@ -196,6 +196,24 @@ router.post("/rtmp", async (req, res) => {
   }
 });
 
+// GET /multistream/targets?userId=1 — active session RTMP targets for the
+// local relay to fan out to (includes stream keys — call from your own relay).
+router.get("/targets", async (req, res) => {
+  try {
+    const { userId } = req.query;
+    const result = await pool.query(
+      `SELECT platform, rtmp_url AS "rtmpUrl", stream_key AS "streamKey"
+       FROM live_sessions
+       WHERE user_id = $1 AND status = 'active'`,
+      [userId]
+    );
+    res.json({ targets: result.rows });
+  } catch (err) {
+    console.error("Get targets error:", err.message);
+    res.status(500).json({ error: "Failed to get targets" });
+  }
+});
+
 // GET /multistream/rtmp?userId=1 — list saved RTMP destinations
 // (stream key is intentionally omitted from the response)
 router.get("/rtmp", async (req, res) => {
