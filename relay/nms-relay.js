@@ -31,12 +31,15 @@
 
 const NodeMediaServer = require("node-media-server");
 const { spawn }        = require("child_process");
+const http             = require("http");
 
 const BACKEND     = process.env.BACKEND_URL || "http://localhost:5000";
 const USER_ID     = process.env.USER_ID || "1";
 const RTMP_PORT   = Number(process.env.RTMP_PORT || 1935);
+const STATUS_PORT = Number(process.env.STATUS_PORT || 8080);
 const STREAM_PATH = process.env.STREAM_PATH || "/live/twinn";
 const LOCAL_PULL  = `rtmp://127.0.0.1:${RTMP_PORT}${STREAM_PATH}`;
+const RELAY_STARTED_AT = Date.now();
 
 // Per-destination backoff tuning
 const BASE_BACKOFF_MS = 1000;   // first reconnect delay
@@ -72,12 +75,14 @@ function destUrl(t) {
 // Start (or restart) a single destination's pusher. Each one supervises itself.
 function startPusher(t) {
   const platform = t.platform;
-  const state = pushers.get(platform) || { attempt: 0 };
+  const state = pushers.get(platform) || { attempt: 0, restarts: 0 };
   state.stopping = false;
+  state.status   = "live";
+  state.startedAt = Date.now();
   pushers.set(platform, state);
 
   const args = ["-i", LOCAL_PULL, "-c", "copy", "-f", "flv", destUrl(t)];
-  const startedAt = Date.now();
+  const startedAt = state.startedAt;
   const proc = spawn("ffmpeg", args, { stdio: ["ignore", "ignore", "inherit"] });
   state.proc = proc;
 
@@ -93,13 +98,17 @@ function startPusher(t) {
 
   proc.on("close", (code) => {
     state.proc = null;
+    state.lastExitCode = code;
     if (state.stopping || !publishing) {
+      state.status = "stopped";
       console.log(`⏹️  [${platform}] stopped`);
       return;
     }
     // Per-destination reconnect: only THIS pusher restarts.
     if (Date.now() - startedAt > STABLE_RUN_MS) state.attempt = 0;
     state.attempt++;
+    state.restarts++;
+    state.status = "reconnecting";
     const backoff = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * 2 ** (state.attempt - 1));
     console.log(`↻ [${platform}] dropped (code ${code}); reconnecting in ${backoff / 1000}s...`);
     setTimeout(() => {
@@ -126,6 +135,79 @@ async function onPublish() {
   console.log(`📡 Relaying to ${targets.length} destination(s): ${targets.map((t) => t.platform).join(", ")}`);
   targets.forEach(startPusher);
 }
+
+// ── Health / status HTTP server ──────────────────────
+function buildStatus() {
+  const destinations = [];
+  for (const [platform, s] of pushers) {
+    destinations.push({
+      platform,
+      status:       s.status || "unknown",       // live | reconnecting | stopped
+      uptimeSec:    s.status === "live" && s.startedAt
+                      ? Math.round((Date.now() - s.startedAt) / 1000)
+                      : 0,
+      restarts:     s.restarts || 0,
+      lastExitCode: s.lastExitCode ?? null,
+    });
+  }
+  return {
+    status:          "ok",
+    publishing,                                    // is OBS currently connected?
+    relayUptimeSec:  Math.round((Date.now() - RELAY_STARTED_AT) / 1000),
+    destinationCount: destinations.length,
+    destinations,
+  };
+}
+
+const DASHBOARD_HTML = `<!doctype html><html><head><meta charset="utf-8">
+<title>Twinn Relay Status</title><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+ body{font-family:system-ui,sans-serif;margin:2rem;background:#0f1216;color:#e6e6e6}
+ h1{font-size:1.3rem} .pub{padding:.2rem .6rem;border-radius:1rem;font-size:.85rem}
+ .on{background:#1b5e20} .off{background:#5e1b1b}
+ table{border-collapse:collapse;margin-top:1rem;width:100%;max-width:640px}
+ th,td{text-align:left;padding:.5rem .75rem;border-bottom:1px solid #2a2f36}
+ .live{color:#66bb6a} .reconnecting{color:#ffa726} .stopped{color:#9e9e9e}
+ .muted{color:#8892a0;font-size:.85rem}
+</style></head><body>
+<h1>📡 Twinn Relay <span id="pub" class="pub off">…</span></h1>
+<div class="muted">relay uptime: <span id="up">–</span>s · auto-refresh 2s</div>
+<table><thead><tr><th>Destination</th><th>Status</th><th>Uptime</th><th>Restarts</th><th>Last exit</th></tr></thead>
+<tbody id="rows"><tr><td colspan="5" class="muted">loading…</td></tr></tbody></table>
+<script>
+ async function tick(){
+  try{
+   const s=await (await fetch('/status')).json();
+   const p=document.getElementById('pub');
+   p.textContent=s.publishing?'OBS live':'waiting for OBS';
+   p.className='pub '+(s.publishing?'on':'off');
+   document.getElementById('up').textContent=s.relayUptimeSec;
+   const rows=s.destinations.map(d=>
+     '<tr><td>'+d.platform+'</td><td class="'+d.status+'">'+d.status+'</td><td>'+d.uptimeSec+'s</td><td>'+d.restarts+'</td><td>'+(d.lastExitCode===null?'–':d.lastExitCode)+'</td></tr>').join('');
+   document.getElementById('rows').innerHTML=rows||'<tr><td colspan="5" class="muted">no destinations yet — start OBS + POST /multistream/start</td></tr>';
+  }catch(e){document.getElementById('pub').textContent='relay unreachable';}
+ }
+ tick();setInterval(tick,2000);
+</script></body></html>`;
+
+const statusServer = http.createServer((req, res) => {
+  const path = (req.url || "/").split("?")[0];
+  res.setHeader("Access-Control-Allow-Origin", "*");
+
+  if (path === "/health") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ status: "ok", publishing, destinations: pushers.size }));
+  } else if (path === "/status") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(buildStatus(), null, 2));
+  } else if (path === "/") {
+    res.writeHead(200, { "Content-Type": "text/html" });
+    res.end(DASHBOARD_HTML);
+  } else {
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "not found" }));
+  }
+});
 
 const nms = new NodeMediaServer({
   rtmp: {
@@ -154,7 +236,9 @@ nms.on("donePublish", (id, streamPath) => {
 });
 
 nms.run();
+statusServer.listen(STATUS_PORT);
 console.log(`✅ Relay server listening on rtmp://0.0.0.0:${RTMP_PORT}`);
+console.log(`📊 Status dashboard: http://localhost:${STATUS_PORT}/   (JSON: /status, /health)`);
 console.log(`👉 In OBS set  Server = rtmp://localhost:${RTMP_PORT}/live   Key = twinn`);
 console.log("   (Ctrl+C to stop the relay.)\n");
 
@@ -162,6 +246,7 @@ function shutdown() {
   console.log("\n🛑 Shutting down...");
   publishing = false;
   stopAllPushers();
+  try { statusServer.close(); } catch (_) { /* ignore */ }
   try { nms.stop(); } catch (_) { /* ignore */ }
   setTimeout(() => process.exit(0), 500);
 }

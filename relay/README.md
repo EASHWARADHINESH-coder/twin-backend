@@ -134,8 +134,32 @@ OBS ──> NMS server ─┼── ffmpeg ──> Facebook  (own supervisor)
 6. Click **Start Streaming**. When OBS connects, the relay reads the active
    targets and starts one pusher per destination.
 
-Environment variables: same as above, plus `RTMP_PORT` (default `1935`) and
-`STREAM_PATH` (default `/live/twinn`).
+Environment variables: same as above, plus `RTMP_PORT` (default `1935`),
+`STATUS_PORT` (default `8080`) and `STREAM_PATH` (default `/live/twinn`).
+
+## Health / status endpoint
+
+Both relay editions run a small HTTP server (default port `8080`, set
+`STATUS_PORT` to change it) so you can watch the stream while it's live:
+
+| Route      | Returns                                                        |
+|------------|----------------------------------------------------------------|
+| `/health`  | Minimal JSON for uptime checks (`{ status, publishing/running }`) |
+| `/status`  | Full JSON: relay uptime + per-destination state                |
+| `/`        | `relay:nms` → live auto-refreshing dashboard · `relay` → JSON  |
+
+**`relay:nms`** reports true per-destination state — each destination shows
+`live` / `reconnecting` / `stopped`, its uptime, restart count, and last exit
+code. Open `http://localhost:8080/` for the dashboard.
+
+**`relay`** (tee mode) can only report the single fan-out process (running,
+targets, restarts) — it cannot detect an individual destination dropping, so
+use `relay:nms` if you need per-destination visibility.
+
+Example:
+```bash
+curl http://localhost:8080/status
+```
 
 ## Environment variables
 

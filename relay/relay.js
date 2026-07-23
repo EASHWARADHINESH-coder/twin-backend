@@ -31,10 +31,13 @@
  */
 
 const { spawn } = require("child_process");
+const http      = require("http");
 
 const BACKEND = process.env.BACKEND_URL || "http://localhost:5000";
 const USER_ID = process.env.USER_ID || "1";
 const INPUT   = process.env.RELAY_INPUT || "rtmp://0.0.0.0:1935/live/twinn";
+const STATUS_PORT = Number(process.env.STATUS_PORT || 8080);
+const RELAY_STARTED_AT = Date.now();
 
 // Backoff tuning
 const BASE_BACKOFF_MS = 1000;   // first retry delay
@@ -44,7 +47,52 @@ const STABLE_RUN_MS   = 30000;  // a run longer than this resets the backoff
 let shuttingDown = false;
 let current      = null; // the live ffmpeg child process
 
+// Live status (single fan-out process, so state is coarse — tee mode can't
+// report per-destination up/down; see /status "note").
+const status = {
+  running:      false,
+  targets:      [],    // platform names being fanned out
+  startedAt:    null,
+  restarts:     0,
+  lastExitCode: null,
+};
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ── Health / status HTTP server ──────────────────────
+function buildStatus() {
+  return {
+    status:         "ok",
+    running:        status.running,
+    targets:        status.targets,
+    targetCount:    status.targets.length,
+    uptimeSec:      status.running && status.startedAt
+                      ? Math.round((Date.now() - status.startedAt) / 1000)
+                      : 0,
+    relayUptimeSec: Math.round((Date.now() - RELAY_STARTED_AT) / 1000),
+    restarts:       status.restarts,
+    lastExitCode:   status.lastExitCode,
+    note: "tee mode: per-destination up/down is not detectable. For per-destination status use relay:nms.",
+  };
+}
+
+const statusServer = http.createServer((req, res) => {
+  const path = (req.url || "/").split("?")[0];
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  if (path === "/health") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ status: "ok", running: status.running, targets: status.targets.length }));
+  } else if (path === "/status" || path === "/") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(buildStatus(), null, 2));
+  } else {
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "not found" }));
+  }
+});
+statusServer.listen(STATUS_PORT, () => {
+  console.log(`📊 Status: http://localhost:${STATUS_PORT}/status  (health: /health)`);
+});
 
 async function getTargets() {
   const res = await fetch(`${BACKEND}/multistream/targets?userId=${USER_ID}`);
@@ -78,9 +126,13 @@ function runOnce(targets) {
     const startedAt = Date.now();
     const ff = spawn("ffmpeg", buildArgs(targets), { stdio: "inherit" });
     current = ff;
+    status.running   = true;
+    status.startedAt = startedAt;
+    status.targets   = targets.map((t) => t.platform);
 
     ff.on("error", (err) => {
       current = null;
+      status.running = false;
       if (err.code === "ENOENT") {
         console.error(
           "\n❌ ffmpeg not found. Install it (free): https://ffmpeg.org/download.html"
@@ -94,6 +146,8 @@ function runOnce(targets) {
 
     ff.on("close", (code) => {
       current = null;
+      status.running      = false;
+      status.lastExitCode = code;
       console.log(`\nffmpeg exited (code ${code}).`);
       resolve({ ranMs: Date.now() - startedAt, fatal: false });
     });
@@ -134,6 +188,7 @@ async function supervise() {
     // A healthy long run means the failure was transient — reset backoff.
     if (ranMs > STABLE_RUN_MS) attempt = 0;
     attempt++;
+    status.restarts++;
     const backoff = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * 2 ** (attempt - 1));
     console.log(`↻ Restarting relay in ${backoff / 1000}s (attempt ${attempt})...`);
     await sleep(backoff);
@@ -146,6 +201,7 @@ function shutdown() {
   shuttingDown = true;
   console.log("\n🛑 Stopping relay...");
   if (current) current.kill("SIGINT");
+  try { statusServer.close(); } catch (_) { /* ignore */ }
   setTimeout(() => process.exit(0), 500);
 }
 process.on("SIGINT", shutdown);
